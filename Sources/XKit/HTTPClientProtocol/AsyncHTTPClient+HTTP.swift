@@ -5,7 +5,7 @@
 //  Created by Kabir Oberai on 05/05/21.
 //
 
-#if os(Linux) || os(Android)
+#if canImport(AsyncHTTPClient)
 import Foundation
 import AsyncHTTPClient
 import NIO
