@@ -13,7 +13,6 @@ import Android
 #endif
 
 #if os(Android)
-// bionic's FILE is an incomplete type, imported as OpaquePointer
 package var stdoutSafe: OpaquePointer {
     get_stdout()
 }

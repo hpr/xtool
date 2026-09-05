@@ -1,18 +1,16 @@
 #!/usr/bin/env bash
-# Cross-builds the native libraries xtool links against (OpenSSL and the
-# libimobiledevice stack) for aarch64 Android, installing them into a
-# separate prefix. Point PKG_CONFIG_PATH and PKG_CONFIG_LIBDIR at its
-# lib/pkgconfig directory so that
-#   swift build --swift-sdk aarch64-unknown-linux-android28
-# can compile and link against them.
-#
+
 # Usage: Android/build-native-libs.sh <install-prefix>
-#   ANDROID_NDK_HOME must point at an unpacked NDK (>= r27).
-#   Native clang, clang++, ld.lld, and LLVM archive tools must be on PATH.
+# 
+# Cross-compiles necessary native libraries for aarch64 Android.
 #
-# The library set mirrors the Linux Docker image (see Dockerfile)
-# libxadi is not needed: XADIProvider is os(Linux)-only (on macOS/Android anisette
-# uses Omnisette), so we don't need the xadi system library.
+# ANDROID_NDK_HOME must point at an unpacked NDK (>= r27).
+# Native clang, clang++, ld.lld, and LLVM archive tools must be on PATH.
+#
+# After running this, point PKG_CONFIG_PATH and PKG_CONFIG_LIBDIR at
+# `<install-prefix>/lib/pkgconfig` so that SwiftPM can find them
+# during
+#   swift build --swift-sdk aarch64-unknown-linux-android28
 
 set -euo pipefail
 shopt -s extglob
@@ -20,10 +18,13 @@ shopt -s extglob
 API=28
 TRIPLE=aarch64-linux-android
 PREFIX=${1:?usage: build-native-libs.sh <install-prefix>}
+: "${ANDROID_NDK_HOME:?ANDROID_NDK_HOME must be set}"
+
 rm -rf "$PREFIX"
 mkdir -p "$PREFIX"
 PREFIX=$(cd "$PREFIX" && pwd)
-: "${ANDROID_NDK_HOME:?ANDROID_NDK_HOME must be set}"
+
+PROCS=$(nproc)
 
 # Only use the NDK's target headers and libraries, not its host executables.
 # The Linux archive labels these directories linux-x86_64 even on ARM hosts.
@@ -40,8 +41,7 @@ trap 'rm -rf "$WORK"' EXIT
 # find each other instead of the host's libraries.
 export PKG_CONFIG_PATH=$PREFIX/lib/pkgconfig
 export PKG_CONFIG_LIBDIR=$PREFIX/lib/pkgconfig
-# Make all configure probes (not just pkg-config ones) find the prefix:
-# AC_CHECK_LIB link tests need -L, header checks need -I.
+# Make all configure probes (not just pkg-config ones) find the prefix
 export CPPFLAGS="-I$PREFIX/include"
 export LDFLAGS="-fuse-ld=lld -L$PREFIX/lib"
 
@@ -57,7 +57,7 @@ tar -C "$WORK" -xzf "$WORK/openssl.tar.gz"
 (
 	cd "$WORK/openssl-3.3.2"
 	./Configure linux-aarch64 no-tests --prefix="$PREFIX"
-	make -j"$(nproc)" build_libs
+	make -j"$PROCS" build_libs
 	make install_dev
 )
 
@@ -69,13 +69,27 @@ build_autotools() { # <tarball-url> <src-dir> [configure args...]
 	(
 		cd "$WORK/$dir"
 		./configure --host="$TRIPLE" --prefix="$PREFIX" --enable-shared --disable-static "$@"
-		make -j"$(nproc)" install
+		make -j"$PROCS" install
 	)
 }
 
 # bionic's pthreads are in libc and modern NDKs ship no libpthread;
 # provide an empty static lib so -lpthread probes and links resolve.
 "$AR" cr "$PREFIX/lib/libpthread.a"
+
+echo "==> curl"
+fetch https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz zlib.tar.gz
+tar -C "$WORK" -xzf "$WORK/zlib.tar.gz"
+(
+	cd "$WORK/zlib-1.3.1"
+	CHOST="$TRIPLE" CFLAGS="-fPIC" ./configure --prefix="$PREFIX"
+	make -j"$PROCS" install
+)
+build_autotools \
+	https://github.com/curl/curl/releases/download/curl-8_16_0/curl-8.16.0.tar.bz2 \
+	curl-8.16.0 --enable-shared --disable-static --with-openssl --without-libpsl \
+	--without-libidn2 --without-brotli --without-zstd --without-nghttp2 \
+	--disable-ldap --disable-ldaps --with-ca-bundle=/system/etc/security/cacerts
 
 echo "==> libimobiledevice stack"
 build_autotools \
@@ -87,23 +101,6 @@ build_autotools \
 build_autotools \
 	https://github.com/libimobiledevice/libusbmuxd/releases/download/2.1.0/libusbmuxd-2.1.0.tar.bz2 \
 	libusbmuxd-2.1.0 --without-udev
-# libtatsu and libimobiledevice need libcurl (they talk to Apple's TSS
-# and activation servers), so build it before them; curl needs zlib,
-# which the NDK does not ship pkg-config files for.
-echo "==> zlib"
-fetch https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz zlib.tar.gz
-tar -C "$WORK" -xzf "$WORK/zlib.tar.gz"
-(
-	cd "$WORK/zlib-1.3.1"
-	# position-independent, like everything else we build
-	CHOST="$TRIPLE" CFLAGS="-fPIC" ./configure --prefix="$PREFIX"
-	make -j"$(nproc)" install
-)
-build_autotools \
-	https://github.com/curl/curl/releases/download/curl-8_16_0/curl-8.16.0.tar.bz2 \
-	curl-8.16.0 --enable-shared --disable-static --with-openssl --without-libpsl \
-	--without-libidn2 --without-brotli --without-zstd --without-nghttp2 \
-	--disable-ldap --disable-ldaps --with-ca-bundle=/system/etc/security/cacerts
 build_autotools \
 	https://github.com/libimobiledevice/libtatsu/releases/download/1.0.4/libtatsu-1.0.4.tar.bz2 \
 	libtatsu-1.0.4
@@ -119,17 +116,17 @@ tar -C "$WORK" -xzf "$WORK/libimobiledevice.tar.gz"
 	git init -q . && git add -A && git -c user.email=ci@localhost -c user.name=ci commit -qm "libimobiledevice master snapshot"
 	echo "2.0.1-git" > .tarball-version
 	./autogen.sh --host="$TRIPLE" --prefix="$PREFIX" --without-cython --enable-shared --disable-static
-	make -j"$(nproc)" install
+	make -j"$PROCS" install
 )
 
-# unxip links liblzma; build it too.
+# unxip links liblzma
 echo "==> xz"
 fetch https://github.com/tukaani-project/xz/releases/download/v5.6.4/xz-5.6.4.tar.gz xz.tar
 tar -C "$WORK" -xf "$WORK/xz.tar"
 (
 	cd "$WORK/xz-5.6.4"
 	./configure --host="$TRIPLE" --prefix="$PREFIX" --enable-shared --disable-static
-	make -j"$(nproc)" install
+	make -j"$PROCS" install
 )
 
 echo "==> cleaning up $PREFIX"
