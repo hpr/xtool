@@ -10,19 +10,19 @@
 #   ANDROID_NDK_HOME must point at an unpacked NDK (>= r27).
 #   Native clang, clang++, ld.lld, and LLVM archive tools must be on PATH.
 #
-# The library set mirrors the Linux Docker image (see Dockerfile): OpenSSL
-# plus libplist/libimobiledevice-glue/libusbmuxd/libtatsu/libimobiledevice
-# from the libimobiledevice project, built as shared libraries. OpenSSL,
-# curl, zlib, and xz remain static. libxadi is not
-# needed: XADIProvider is os(Linux)-only (on macOS/Android anisette uses
-# Omnisette), so the XADI system library never enters the link.
+# The library set mirrors the Linux Docker image (see Dockerfile)
+# libxadi is not needed: XADIProvider is os(Linux)-only (on macOS/Android anisette
+# uses Omnisette), so we don't need the xadi system library.
+
 set -euo pipefail
+shopt -s extglob
 
 API=28
 TRIPLE=aarch64-linux-android
-DEST=${1:?usage: build-native-libs.sh <install-prefix>}
-mkdir -p "$DEST"
-DEST=$(cd "$DEST" && pwd)
+PREFIX=${1:?usage: build-native-libs.sh <install-prefix>}
+rm -rf "$PREFIX"
+mkdir -p "$PREFIX"
+PREFIX=$(cd "$PREFIX" && pwd)
 : "${ANDROID_NDK_HOME:?ANDROID_NDK_HOME must be set}"
 
 # Only use the NDK's target headers and libraries, not its host executables.
@@ -36,8 +36,6 @@ export STRIP="llvm-objcopy --strip-all"
 
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
-PREFIX=$WORK/prefix
-mkdir -p "$PREFIX"
 # Point pkg-config exclusively at the cross prefix so the autotools builds
 # find each other instead of the host's libraries.
 export PKG_CONFIG_PATH=$PREFIX/lib/pkgconfig
@@ -58,7 +56,7 @@ fetch \
 tar -C "$WORK" -xzf "$WORK/openssl.tar.gz"
 (
 	cd "$WORK/openssl-3.3.2"
-	./Configure linux-aarch64 no-shared no-tests --prefix="$PREFIX"
+	./Configure linux-aarch64 no-tests --prefix="$PREFIX"
 	make -j"$(nproc)" build_libs
 	make install_dev
 )
@@ -98,12 +96,12 @@ tar -C "$WORK" -xzf "$WORK/zlib.tar.gz"
 (
 	cd "$WORK/zlib-1.3.1"
 	# position-independent, like everything else we build
-	CHOST="$TRIPLE" CFLAGS="-fPIC" ./configure --prefix="$PREFIX" --static
+	CHOST="$TRIPLE" CFLAGS="-fPIC" ./configure --prefix="$PREFIX"
 	make -j"$(nproc)" install
 )
 build_autotools \
 	https://github.com/curl/curl/releases/download/curl-8_16_0/curl-8.16.0.tar.bz2 \
-	curl-8.16.0 --disable-shared --enable-static --with-openssl --without-libpsl \
+	curl-8.16.0 --enable-shared --disable-static --with-openssl --without-libpsl \
 	--without-libidn2 --without-brotli --without-zstd --without-nghttp2 \
 	--disable-ldap --disable-ldaps --with-ca-bundle=/system/etc/security/cacerts
 build_autotools \
@@ -130,44 +128,11 @@ fetch https://github.com/tukaani-project/xz/releases/download/v5.6.4/xz-5.6.4.ta
 tar -C "$WORK" -xf "$WORK/xz.tar"
 (
 	cd "$WORK/xz-5.6.4"
-	./configure --host="$TRIPLE" --prefix="$PREFIX" --disable-shared --enable-static
+	./configure --host="$TRIPLE" --prefix="$PREFIX" --enable-shared --disable-static
 	make -j"$(nproc)" install
 )
 
-echo "==> installing into $DEST"
-INC_DST=$DEST/include
-LIB_DST=$DEST/lib
-mkdir -p "$INC_DST" "$LIB_DST"
-cp -R "$PREFIX/include/." "$INC_DST/"
-cp -a "$PREFIX/lib/"*.a "$LIB_DST/"
-cp -a "$PREFIX/lib/"*.so* "$LIB_DST/"
+echo "==> cleaning up $PREFIX"
+rm -rf "$PREFIX"/!(include|lib) "$PREFIX"/lib/!(*.so*|pkgconfig)
 
-# Generate pkg-config files pointing at the installation prefix. SwiftPM's
-# systemLibrary targets query pkg-config for cflags/libs; on this host
-# pkg-config would otherwise resolve to host libraries.
-echo "==> generating pkg-config files"
-PC_DST=$DEST/lib/pkgconfig
-mkdir -p "$PC_DST"
-pc() { # <name> <version> <libs> [requires]
-	cat > "$PC_DST/$1.pc" <<EOF
-Name: $1
-Description: cross-compiled for Android
-Version: $2
-Libs: -L$LIB_DST $3
-Cflags: -I$INC_DST
-${4:+Requires: $4}
-EOF
-}
-pc openssl 3.3.2 "-lssl -lcrypto"
-pc liblzma 5.6.4 "-llzma"
-pc zlib 1.3.1 "-lz"
-pc libplist-2.0 2.6.0 "-lplist-2.0"
-pc libusbmuxd-2.0 2.1.0 "-lusbmuxd-2.0" "libplist-2.0"
-pc libimobiledevice-glue-1.0 1.3.1 "-limobiledevice-glue-1.0" "libplist-2.0"
-pc libcurl 8.16.0 "-lcurl -lssl -lcrypto -lz"
-# libtatsu's .pc is versioned (libtatsu-1.0) but its libtool target is not:
-# it installs libtatsu.a, so the link flag must be -ltatsu.
-pc libtatsu-1.0 1.0.4 "-ltatsu" "libplist-2.0"
-pc libimobiledevice-1.0 2.0.0 "-limobiledevice-1.0" "libplist-2.0 libusbmuxd-2.0 libimobiledevice-glue-1.0 libtatsu-1.0"
-
-echo "==> done: native libs installed into $DEST"
+echo "==> done: native libs installed into $PREFIX"
