@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# Usage: Android/build-native-libs.sh <install-prefix>
+# Usage: Android/build-deps.sh <install-prefix>
 # 
 # Cross-compiles necessary native libraries for aarch64 Android.
 #
@@ -9,20 +9,23 @@
 #
 # After running this, point PKG_CONFIG_PATH and PKG_CONFIG_LIBDIR at
 # `<install-prefix>/lib/pkgconfig` so that SwiftPM can find them
-# during
-#   swift build --swift-sdk aarch64-unknown-linux-android28
+# during build.sh.
 
 set -euo pipefail
 shopt -s extglob
 
-API=28
-TRIPLE=aarch64-linux-android
-PREFIX=${1:?usage: build-native-libs.sh <install-prefix>}
+: "${ANDROID_ARCH:?ANDROID_ARCH must be set}"
+
+TRIPLE=$ANDROID_ARCH-linux-android
+PREFIX=${1:?usage: build-deps.sh <install-prefix>}
 : "${ANDROID_NDK_HOME:?ANDROID_NDK_HOME must be set}"
 
 rm -rf "$PREFIX"
 mkdir -p "$PREFIX"
 PREFIX=$(cd "$PREFIX" && pwd)
+
+cd "$(dirname "${BASH_SOURCE[0]}")"
+source defs.sh
 
 PROCS=$(nproc)
 
@@ -30,8 +33,8 @@ PROCS=$(nproc)
 # The Linux archive labels these directories linux-x86_64 even on ARM hosts.
 NDK=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64
 RESOURCE_DIR=("$NDK"/lib/clang/*)
-export CC="clang --target=$TRIPLE$API --sysroot=$NDK/sysroot -resource-dir=${RESOURCE_DIR[0]}"
-export CXX="clang++ --target=$TRIPLE$API --sysroot=$NDK/sysroot -resource-dir=${RESOURCE_DIR[0]}"
+export CC="clang --target=$TRIPLE$ANDROID_API_LEVEL --sysroot=$NDK/sysroot -resource-dir=${RESOURCE_DIR[0]}"
+export CXX="clang++ --target=$TRIPLE$ANDROID_API_LEVEL --sysroot=$NDK/sysroot -resource-dir=${RESOURCE_DIR[0]}"
 export AR=llvm-ar RANLIB=llvm-ranlib NM=llvm-nm
 export STRIP="llvm-objcopy --strip-all"
 
@@ -56,7 +59,7 @@ fetch \
 tar -C "$WORK" -xzf "$WORK/openssl.tar.gz"
 (
 	cd "$WORK/openssl-3.3.2"
-	./Configure linux-aarch64 no-tests --prefix="$PREFIX"
+	./Configure linux-$ANDROID_ARCH no-tests --prefix="$PREFIX"
 	make -j"$PROCS" build_libs
 	make install_dev
 )

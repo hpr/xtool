@@ -1,15 +1,16 @@
 # Android development
 
+Run `make android-dev` to open a development
+shell with the Android Swift SDK + dependencies configured.
+
 Build xtool for aarch64 Android (API 28) from the repository root:
 
 ```sh
-docker compose run --build --rm xtool-android \
-  swift build --product xtool --swift-sdk aarch64-unknown-linux-android28
+make android [RELEASE=1]
 ```
 
-Run `docker compose run --build --rm xtool-android` to open a development
-shell.
+Run the Android runtime smoke checks with an existing ARM64 AVD:
 
-When deploying the executable to Android, include the `.so` files from
-`/opt/android-native/lib` in the container, alongside the Swift/Android
-runtime libraries required by the app.
+```sh
+Android/smoke-test.sh Pixel_9a
+```

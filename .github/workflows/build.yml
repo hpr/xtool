@@ -56,6 +56,4 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
       - name: Cross-compile for Android
-        run: |
-          docker compose run --build --rm xtool-android \
-            swift build --product xtool --swift-sdk aarch64-unknown-linux-android28
+        run: Android/build.sh --debug
