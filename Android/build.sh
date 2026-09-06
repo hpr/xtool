@@ -14,7 +14,7 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
 if [[ "${XTL_ANDROID_ENV:-}" != 1 ]]; then
 	# re-exec inside the Android build environment
-	exec docker compose run --build --rm -it xtool-android env XTL_ANDROID_NESTED=1 Android/build.sh "$@"
+	exec docker compose run --build --rm xtool-android env XTL_ANDROID_NESTED=1 Android/build.sh "$@"
 fi
 
 source Android/defs.sh
